@@ -355,6 +355,50 @@ def prompt_stop_distance():
             print("Error: Invalid number format.")
 
 
+def reset_instance_lock(symbol, trade_type):
+    """Reset instance lock for a crashed or stuck instance."""
+    import sqlite3 as sl
+    import datetime
+
+    print(f"Resetting instance lock for {symbol} {trade_type}...")
+
+    try:
+        con = sl.connect("exit_strategy.db")
+        cursor = con.cursor()
+
+        # Check if lock exists
+        cursor.execute(
+            "SELECT running, pid, started_at FROM instance_locks WHERE symbol = ? AND trade_type = ?",
+            (symbol, trade_type)
+        )
+        result = cursor.fetchone()
+
+        if result:
+            running, pid, started_at = result
+            if running == 1:
+                print(f"Found active lock (PID: {pid}, started: {started_at})")
+                print(f"Resetting lock...")
+                cursor.execute(
+                    """UPDATE instance_locks
+                       SET running = 0, updated_at = ?
+                       WHERE symbol = ? AND trade_type = ?""",
+                    (datetime.datetime.now().isoformat(), symbol, trade_type)
+                )
+                con.commit()
+                print(f"✓ Lock reset successfully for {symbol} {trade_type}")
+            else:
+                print(f"Lock already inactive for {symbol} {trade_type}")
+        else:
+            print(f"No lock found for {symbol} {trade_type}")
+
+        cursor.close()
+        con.close()
+
+    except Exception as e:
+        print(f"Error resetting lock: {e}")
+        sys.exit(1)
+
+
 def main(options):
 
     # Step 0: Determine trade type (buy/sell) - interactive if not provided
@@ -440,6 +484,9 @@ Examples:
 
   Custom DCA with percentages:
     python main.py --symbol BTC/USD --type sell --size 0.05 --DCA '+5%%:0.5,+10%%:0.5,+15%%:1.0'
+
+  Reset stuck instance lock:
+    python main.py --symbol DOGE/USD --type sell --reset-lock
         ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -458,7 +505,18 @@ Examples:
                        help="Comma-delimited DCA thresholds as PRICE:AMOUNT pairs. "
                             "Use absolute prices or +PERCENT%%. "
                             "Example: '0.30:100,0.40:150' or '+10%%:100,+20%%:150'")
+    parser.add_argument('--reset-lock', action='store_true',
+                       help="Reset instance lock for the specified symbol and type (use if previous instance crashed)")
 
     options = parser.parse_args()
+
+    # Handle --reset-lock flag
+    if options.reset_lock:
+        if not options.symbol or not options.type:
+            print("Error: --reset-lock requires both --symbol and --type")
+            sys.exit(1)
+        reset_instance_lock(options.symbol, options.type)
+        sys.exit(0)
+
     main(options)
 

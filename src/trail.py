@@ -1,6 +1,7 @@
 import datetime
 import logging
 import time
+import os
 import pandas as pd
 import sqlite3 as sl
 from coinbasepro import CoinbasePro
@@ -64,14 +65,27 @@ class StopTrail():
 
 		# open db connection and check for a persisted stoploss value
 		self.con = sl.connect("exit_strategy.db")
+
+		# Check for existing instance lock
+		locked, pid, started_at = self.check_instance_lock()
+		if locked:
+			logger.error('Another instance is already running for %s %s (PID: %s, started: %s)' %
+			            (self.market, self.type, pid, started_at))
+			logger.error('Use --reset-lock flag to clear stale locks if the previous instance crashed')
+			self.con.close()
+			raise RuntimeError('Instance already running for %s %s' % (self.market, self.type))
+
+		# Acquire instance lock
+		self.acquire_instance_lock()
+
 		self.cursor = self.con.cursor()
-		self.cursor.execute("SELECT * FROM stoploss;")
+		self.cursor.execute("SELECT * FROM stoploss WHERE symbol = ?", (self.market,))
 		first_row = self.cursor.fetchone()
 		self.cursor.close()
-		stop_value = first_row[1]
+		stop_value = first_row[2] if first_row else None
 		if stop_value != None:
 			logger.warn('Stoploss already set at: %.2f' % stop_value)
-			self.stoploss = float(first_row[1])
+			self.stoploss = float(first_row[2])
 			self.stoploss_initialized = True
 		else:
 			logger.info('No stoploss currently set')
@@ -85,6 +99,13 @@ class StopTrail():
 
 			
 	def __del__(self):
+		# Release instance lock before cleanup
+		if hasattr(self, 'market') and hasattr(self, 'type') and hasattr(self, 'con'):
+			try:
+				self.release_instance_lock()
+			except Exception:
+				pass  # Lock release failed, ignore
+
 		# Handle partial initialization (if __init__ failed)
 		if hasattr(self, 'market'):
 			message = ('Program has exited: %s.' % self.market)
@@ -108,6 +129,72 @@ class StopTrail():
 			 self.con.commit()
 			 self.con.close()
 			 logger.info('Database closed')
+
+
+	def ensure_instance_locks_table(self):
+		"""Ensure instance_locks table exists (for backward compatibility with old databases)."""
+		cursor = self.con.cursor()
+		cursor.execute("""
+			CREATE TABLE IF NOT EXISTS instance_locks (
+				symbol TEXT NOT NULL,
+				trade_type TEXT NOT NULL,
+				running INTEGER NOT NULL DEFAULT 0,
+				pid INTEGER,
+				started_at TEXT,
+				updated_at TEXT,
+				PRIMARY KEY (symbol, trade_type)
+			)
+		""")
+		cursor.close()
+		self.con.commit()
+
+
+	def check_instance_lock(self):
+		"""Check if another instance is already running for this symbol and trade type."""
+		self.ensure_instance_locks_table()
+
+		cursor = self.con.cursor()
+		cursor.execute(
+			"SELECT running, pid, started_at FROM instance_locks WHERE symbol = ? AND trade_type = ?",
+			(self.market, self.type)
+		)
+		result = cursor.fetchone()
+		cursor.close()
+
+		if result and result[0] == 1:  # running flag is 1
+			return True, result[1], result[2]  # (locked, pid, started_at)
+		return False, None, None
+
+
+	def acquire_instance_lock(self):
+		"""Acquire lock for this instance."""
+		cursor = self.con.cursor()
+		cursor.execute(
+			"""INSERT OR REPLACE INTO instance_locks
+			   (symbol, trade_type, running, pid, started_at, updated_at)
+			   VALUES (?, ?, 1, ?, ?, ?)""",
+			(self.market, self.type, os.getpid(),
+			 datetime.datetime.now().isoformat(),
+			 datetime.datetime.now().isoformat())
+		)
+		cursor.close()
+		self.con.commit()
+		logger.info('Acquired instance lock for %s %s (PID: %s)' % (self.market, self.type, os.getpid()))
+
+
+	def release_instance_lock(self):
+		"""Release lock for this instance."""
+		if hasattr(self, 'con') and self.con:
+			cursor = self.con.cursor()
+			cursor.execute(
+				"""UPDATE instance_locks
+				   SET running = 0, updated_at = ?
+				   WHERE symbol = ? AND trade_type = ?""",
+				(datetime.datetime.now().isoformat(), self.market, self.type)
+			)
+			cursor.close()
+			self.con.commit()
+			logger.info('Released instance lock for %s %s' % (self.market, self.type))
 
 
 	def calculate_stop_from_price(self, price, direction='below'):
@@ -167,13 +254,13 @@ class StopTrail():
 
 		# Clear existing thresholds
 		self.cursor = self.con.cursor()
-		self.cursor.execute("DELETE FROM thresholds")
+		self.cursor.execute("DELETE FROM thresholds WHERE symbol = ?", (self.market,))
 		self.cursor.close()
 		self.con.commit()
 
 		# Reset hopper
 		self.cursor = self.con.cursor()
-		self.cursor.execute("UPDATE hopper SET amount = 0 WHERE id = 1")
+		self.cursor.execute("UPDATE hopper SET amount = 0 WHERE symbol = ?", (self.market,))
 		self.cursor.close()
 		self.con.commit()
 
@@ -185,8 +272,8 @@ class StopTrail():
 			cumulative_amount += amount
 			self.cursor = self.con.cursor()
 			self.cursor.execute(
-				"INSERT INTO thresholds (id, price, amount, threshold_hit, sold_at) VALUES (?, ?, ?, 'N', NULL)",
-				(i + 1, price, amount)
+				"INSERT INTO thresholds (id, symbol, price, amount, threshold_hit, sold_at) VALUES (?, ?, ?, ?, 'N', NULL)",
+				(i + 1, self.market, price, amount)
 			)
 			self.cursor.close()
 			self.con.commit()
@@ -203,10 +290,10 @@ class StopTrail():
 	def initialize_hopper(self):
 		if self.type == "sell":
 			self.cursor = self.con.cursor()
-			self.cursor.execute("SELECT * FROM hopper ;")
+			self.cursor.execute("SELECT * FROM hopper WHERE symbol = ?", (self.market,))
 			first_row = self.cursor.fetchone()
 			self.cursor.close()
-			hopper_amount = first_row[1]
+			hopper_amount = first_row[2] if first_row else 0
 
 			# Auto-initialize hopper if empty
 			if hopper_amount == 0:
@@ -225,7 +312,7 @@ class StopTrail():
 				# Save to database
 				if hopper_amount > 0:
 					self.cursor = self.con.cursor()
-					self.cursor.execute("REPLACE INTO hopper (id, amount) VALUES (1, ?)", (hopper_amount,))
+					self.cursor.execute("REPLACE INTO hopper (id, symbol, amount) VALUES (1, ?, ?)", (self.market, hopper_amount))
 					self.cursor.close()
 					self.con.commit()
 			else:
@@ -242,7 +329,7 @@ class StopTrail():
 				return
 
 			self.cursor = self.con.cursor()
-			self.cursor.execute("SELECT Count(*) from thresholds WHERE threshold_hit = 'N';")
+			self.cursor.execute("SELECT Count(*) from thresholds WHERE symbol = ? AND threshold_hit = 'N'", (self.market,))
 			result = self.cursor.fetchone()
 			self.cursor.close()
 			remaining_rows = result[0]
@@ -250,18 +337,18 @@ class StopTrail():
 
 			if remaining_rows > 0:
 				self.cursor = self.con.cursor()
-				self.cursor.execute("SELECT * FROM thresholds WHERE threshold_hit = 'N';")
+				self.cursor.execute("SELECT * FROM thresholds WHERE symbol = ? AND threshold_hit = 'N'", (self.market,))
 				first_row = self.cursor.fetchone()
 				self.cursor.close()
-				threshold = first_row[1]
-				exit_amount = first_row[2]
+				threshold = first_row[2]
+				exit_amount = first_row[3]
 				
 				if self.price >= threshold:
 					try:
 						# update our threshold table to indicate that a new threshold has been hit
 						row_id = str(first_row[0])
 						self.cursor = self.con.cursor()
-						self.cursor.execute("UPDATE thresholds SET threshold_hit = 'Y' WHERE id = ?", (row_id))
+						self.cursor.execute("UPDATE thresholds SET threshold_hit = 'Y' WHERE symbol = ? AND id = ?", (self.market, row_id))
 						self.cursor.close()
 						self.con.commit()
 					except Exception as e:
@@ -274,23 +361,23 @@ class StopTrail():
 					except Exception as e:
 						logger.exception('Failed to initialize_stop() | %s' % e)
 
-					try:	
+					try:
 						# write the new hopper value to the hopper table
 						logger.warn('Hit our threshold at ' + str(threshold) + '. Adding ' + str(exit_amount) + ' to hopper.')
 						self.hopper += exit_amount
 						self.cursor = self.con.cursor()
-						self.cursor.execute("REPLACE INTO hopper (id, amount) VALUES (?, ?)", (1, self.hopper))
+						self.cursor.execute("REPLACE INTO hopper (id, symbol, amount) VALUES (?, ?, ?)", (1, self.market, self.hopper))
 						logger.warn('New hopper total: %.4f' % self.hopper)
 						logger.warn('Thresholds remaining: %s' % (int(remaining_rows)-1))
 						# check to see if we have any remaining thesholds, if so, output the next threshold value
-						self.cursor.execute("SELECT Count(*) from thresholds WHERE threshold_hit = 'N';")
+						self.cursor.execute("SELECT Count(*) from thresholds WHERE symbol = ? AND threshold_hit = 'N'", (self.market,))
 						result = self.cursor.fetchone()
 						remaining_rows = result[0]
 						if remaining_rows > 0:
-							self.cursor.execute("SELECT * FROM thresholds WHERE threshold_hit = 'N';")
+							self.cursor.execute("SELECT * FROM thresholds WHERE symbol = ? AND threshold_hit = 'N'", (self.market,))
 							first_row = self.cursor.fetchone()
 							self.cursor.close()
-							next_threshold = first_row[1]
+							next_threshold = first_row[2]
 							self.cursor.close()
 							self.con.commit()
 							logger.warn('Next threshold at: %.2f' % next_threshold)
@@ -325,7 +412,7 @@ class StopTrail():
 
 			# write the stoploss value to the stoploss table
 			self.cursor = self.con.cursor()
-			self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
+			self.cursor.execute("REPLACE INTO stoploss (id, symbol, stop_value) VALUES (?, ?, ?)", (1, self.market, self.stoploss))
 			logger.warn('Stop loss initialized at deposit price: %.2f' % self.stoploss)
 			self.cursor.close()
 			self.con.commit()
@@ -337,7 +424,7 @@ class StopTrail():
 
 			self.stoploss = self.calculate_stop_from_price(self.price, 'below')
 			self.cursor = self.con.cursor()
-			self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
+			self.cursor.execute("REPLACE INTO stoploss (id, symbol, stop_value) VALUES (?, ?, ?)", (1, self.market, self.stoploss))
 			logger.warn('Stop loss initialized at: ' + str(self.stoploss))
 			self.cursor.close()
 			self.con.commit()
@@ -357,7 +444,7 @@ class StopTrail():
 				if new_stop > self.stoploss:
 					self.stoploss = new_stop
 					self.cursor = self.con.cursor()
-					self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
+					self.cursor.execute("REPLACE INTO stoploss (id, symbol, stop_value) VALUES (?, ?, ?)", (1, self.market, self.stoploss))
 					self.cursor.close()
 					self.con.commit()
 					logger.warn("Raised stop loss to %.2f" % (self.stoploss))
@@ -377,7 +464,7 @@ class StopTrail():
 					if new_stop < self.stoploss:
 						self.stoploss = new_stop
 						self.cursor = self.con.cursor()
-						self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
+						self.cursor.execute("REPLACE INTO stoploss (id, symbol, stop_value) VALUES (?, ?, ?)", (1, self.market, self.stoploss))
 						self.cursor.close()
 						self.con.commit()
 						logger.warn("Lowered stop loss to %.2f" % self.stoploss)
@@ -394,11 +481,11 @@ class StopTrail():
 	def execute_sell(self):
 		# first, do a table lookup to find the most recent sold_at price
 		self.cursor = self.con.cursor()
-		last_threshold_sold_at = self.cursor.execute("SELECT * FROM thresholds WHERE threshold_hit = 'Y' and sold_at is not null;").fetchall()
+		last_threshold_sold_at = self.cursor.execute("SELECT * FROM thresholds WHERE symbol = ? AND threshold_hit = 'Y' and sold_at is not null", (self.market,)).fetchall()
 		self.cursor.close()
 
 		if last_threshold_sold_at:
-			last_sold_at_price = last_threshold_sold_at[-1][4]
+			last_sold_at_price = last_threshold_sold_at[-1][5]
 
 			killswitch = self.price < last_sold_at_price
 			logger.info('Killswitch: ' + str(killswitch))
@@ -410,20 +497,20 @@ class StopTrail():
 				logger.warn('The bot will not execute a sell under these conditions. Resetting and waiting for next price data from the exchange.')
 				# reset hopper
 				self.cursor = self.con.cursor()
-				self.cursor.execute("REPLACE INTO hopper (id, amount) VALUES (1, 0)")
+				self.cursor.execute("REPLACE INTO hopper (id, symbol, amount) VALUES (1, ?, 0)", (self.market,))
 				self.cursor.close()
 				self.hopper = 0
 				logger.warn("Reset Hopper: " + str(self.hopper))
 				# reset stoploss
 				self.stoploss = None
 				self.cursor = self.con.cursor()
-				self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
+				self.cursor.execute("REPLACE INTO stoploss (id, symbol, stop_value) VALUES (?, ?, ?)", (1, self.market, self.stoploss))
 				self.cursor.close()
 				self.stoploss_initialized = False
 				logger.warn("Reset Stoploss: " + str(self.stoploss))
 				# reset threshold - find rows where threshold = Y but there is no sold_at value
 				self.cursor = self.con.cursor()
-				self.cursor.execute("UPDATE thresholds SET threshold_hit = 'N' WHERE threshold_hit = 'Y' AND sold_at is null")
+				self.cursor.execute("UPDATE thresholds SET threshold_hit = 'N' WHERE symbol = ? AND threshold_hit = 'Y' AND sold_at is null", (self.market,))
 				self.cursor.close()
 				self.con.commit()
  				# restart our loop. Don't execute sell. Instead, check prices again, etc. 
@@ -461,18 +548,18 @@ class StopTrail():
 			# reset hopper after executing sell
 			error_message = 'Failed to update exit_strategy.db after executing sell order'
 			self.cursor = self.con.cursor()
-			self.cursor.execute("REPLACE INTO hopper (id, amount) VALUES (1, 0)")
+			self.cursor.execute("REPLACE INTO hopper (id, symbol, amount) VALUES (1, ?, 0)", (self.market,))
 			self.hopper = 0
 			logger.warn("Reset Hopper: " + str(self.hopper))
 
 			# reset stoploss after executing sell
 			self.stoploss = None
-			self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
+			self.cursor.execute("REPLACE INTO stoploss (id, symbol, stop_value) VALUES (?, ?, ?)", (1, self.market, self.stoploss))
 			self.stoploss_initialized = False
 			logger.warn("Reset Stoploss: " + str(self.stoploss))
 
 			# add sell price to sold_at column for all rows included in the current hopper
-			self.cursor.execute("UPDATE thresholds SET sold_at = %.2f WHERE threshold_hit = 'Y' AND sold_at is null" % self.price)
+			self.cursor.execute("UPDATE thresholds SET sold_at = %.2f WHERE symbol = ? AND threshold_hit = 'Y' AND sold_at is null" % self.price, (self.market,))
 			logger.info("Updated sold_at column(s)!")
 			self.cursor.close()
 			self.con.commit()
@@ -529,11 +616,11 @@ class StopTrail():
 					# update win_tracker, add to the # of buys in the table, add to # of wins if it's a win
 					# output whether buy was a win, display % of buys that are wins
 					self.cursor = self.con.cursor()
-					self.cursor.execute("SELECT * FROM win_tracker;")
+					self.cursor.execute("SELECT * FROM win_tracker WHERE symbol = ?", (self.market,))
 					data = self.cursor.fetchone()
-					price_at_deposit = data[1]
-					buy_count = data[3]
-					win_count = data[4]
+					price_at_deposit = data[2]
+					buy_count = data[4]
+					win_count = data[5]
 					logger.warn('price_at_deposit: %.2f' % price_at_deposit)
 					logger.warn('price_at_buy: %.2f' % filled_price)
 
@@ -551,8 +638,8 @@ class StopTrail():
 					win_percent = (win_count / buy_count) * 100
 					logger.warn("RESULT: Running win percentage is %i / %i = %.2f%%" % (win_count, buy_count, win_percent))
 
-					query = "UPDATE win_tracker SET price_at_buy = ?, buy_count = ?, win_count = ?"
-					query_data = (filled_price, buy_count, win_count)
+					query = "UPDATE win_tracker SET price_at_buy = ?, buy_count = ?, win_count = ? WHERE symbol = ?"
+					query_data = (filled_price, buy_count, win_count, self.market)
 					self.cursor.execute(query, query_data)
 					self.cursor.close()
 					self.con.commit()
@@ -570,20 +657,20 @@ class StopTrail():
 			error_message = 'Failed to update exit_strategy.db after executing sell order'
 			self.stoploss = None
 			self.cursor = self.con.cursor()
-			self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
+			self.cursor.execute("REPLACE INTO stoploss (id, symbol, stop_value) VALUES (?, ?, ?)", (1, self.market, self.stoploss))
 			self.stoploss_initialized = False
 			logger.warn("Reset Stoploss: " + str(self.stoploss))
 
 			# reset coin_hopper to 0 after executing buy
 			self.cursor = self.con.cursor()
-			self.cursor.execute("REPLACE INTO available_funds (id, account_balance, coin_hopper) VALUES (?, ?, ?)", (1, self.balance, 0))
+			self.cursor.execute("REPLACE INTO available_funds (id, symbol, account_balance, coin_hopper) VALUES (?, ?, ?, ?)", (1, self.market, self.balance, 0))
 			self.coin_hopper = 0
 			logger.warn("Reset coin_hopper: " + str(self.coin_hopper))
 
 			# reset price_at_deposit to None after executing buy
 			self.cursor = self.con.cursor()
 			self.price_at_deposit = None
-			self.cursor.execute("UPDATE win_tracker SET price_at_deposit = null")
+			self.cursor.execute("UPDATE win_tracker SET price_at_deposit = null WHERE symbol = ?", (self.market,))
 			logger.warn("Reset price_at_deposit: " + str(self.price_at_deposit))
 
 			self.cursor.close()
@@ -613,11 +700,11 @@ class StopTrail():
 	def dca_buy_logic(self):
 
 		self.cursor = self.con.cursor()
-		self.cursor.execute("SELECT * FROM win_tracker;")
+		self.cursor.execute("SELECT * FROM win_tracker WHERE symbol = ?", (self.market,))
 		data = self.cursor.fetchone()
 		self.cursor.close()
 
-		price_at_deposit = data[1]
+		price_at_deposit = data[2] if data else None
 		upper_threshold = self.calculate_stop_from_price(price_at_deposit, 'above')
 		lower_threshold = self.calculate_stop_from_price(price_at_deposit, 'below')
 
@@ -692,17 +779,17 @@ class StopTrail():
 			# if self.balance > 50: # need some threshold of account balance - otherwise we should wait for more funds. What's the minimum USD buy?
 			# get last_known_balance from the available_funds table
 			self.cursor = self.con.cursor()
-			self.cursor.execute("SELECT * FROM available_funds;")
+			self.cursor.execute("SELECT * FROM available_funds WHERE symbol = ?", (self.market,))
 			first_row = self.cursor.fetchone()
 			self.cursor.close()
-			last_known_account_balance = first_row[1]
-			self.coin_hopper = first_row[2]
+			last_known_account_balance = first_row[2] if first_row else 0
+			self.coin_hopper = first_row[3] if first_row else 0
 
 			self.cursor = self.con.cursor()
-			self.cursor.execute("SELECT * FROM win_tracker ;")
+			self.cursor.execute("SELECT * FROM win_tracker WHERE symbol = ?", (self.market,))
 			data = self.cursor.fetchone()
 			self.cursor.close()
-			self.price_at_deposit = data[1]
+			self.price_at_deposit = data[2] if data else None
 			# price_at_initial_deposit = data[1]
 			# self.price_at_deposit = price_at_initial_deposit
 
@@ -718,7 +805,7 @@ class StopTrail():
 
 				# replace the last known account balance with the balance from coinbase
 				self.cursor = self.con.cursor()
-				self.cursor.execute("REPLACE INTO available_funds (id, account_balance, coin_hopper) VALUES (?, ?, ?)", (1, self.balance, self.coin_hopper))
+				self.cursor.execute("REPLACE INTO available_funds (id, symbol, account_balance, coin_hopper) VALUES (?, ?, ?, ?)", (1, self.market, self.balance, self.coin_hopper))
 				self.cursor.close()
 				self.con.commit()
 				logger.warn("BALANCE UPDATE: %.2f USD was just added to account balance. New total: %.2f" % (difference, self.balance))
@@ -737,7 +824,7 @@ class StopTrail():
 						logger.warn('PRICE: Market price at time of deposit: %.2f' % self.price)
 						self.cursor = self.con.cursor()
 						self.price_at_deposit = self.price
-						self.cursor.execute("UPDATE win_tracker SET price_at_deposit = %.2f" % self.price)
+						self.cursor.execute("UPDATE win_tracker SET price_at_deposit = %.2f WHERE symbol = ?" % self.price, (self.market,))
 						self.cursor.close()
 						self.con.commit()
 
@@ -745,11 +832,11 @@ class StopTrail():
 						logger.warn('Price at deposit was already set at: %.4f. Treating this as an addition to our funds' % self.price_at_deposit)
 						#self.price_at_deposit = price_at_initial_deposit
 
-			elif difference < 0: 
+			elif difference < 0:
 				# do nothing with the coin hopper
 				# update the last known account balance to reflect balance in coinbase
 				self.cursor = self.con.cursor()
-				self.cursor.execute("REPLACE INTO available_funds (id, account_balance, coin_hopper) VALUES (?, ?, ?)", (1, self.balance, self.coin_hopper))
+				self.cursor.execute("REPLACE INTO available_funds (id, symbol, account_balance, coin_hopper) VALUES (?, ?, ?, ?)", (1, self.market, self.balance, self.coin_hopper))
 				self.cursor.close()
 				self.con.commit()
 				logger.warn("BALANCE UPDATE: %.2f USD was just removed from account balance. New total: %.2f" % (abs(difference), self.balance))

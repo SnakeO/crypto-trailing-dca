@@ -5,6 +5,7 @@ with con:
     con.execute("""
         CREATE TABLE thresholds (
             id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
             price INTEGER,
             amount INTEGER,
             threshold_hit STRING,
@@ -15,6 +16,7 @@ with con:
     con.execute("""
         CREATE TABLE hopper (
             id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
             amount INTEGER
         );
     """)
@@ -22,14 +24,16 @@ with con:
     con.execute("""
         CREATE TABLE available_funds (
             id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
             account_balance INTEGER,
             coin_hopper INTEGER
         );
-    """)   
+    """)
 
     con.execute("""
         CREATE TABLE stoploss (
             id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
             stop_value REAL
         );
     """)
@@ -37,44 +41,30 @@ with con:
     con.execute("""
         CREATE TABLE win_tracker (
             id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
             price_at_deposit REAL,
             price_at_buy INTEGER,
             buy_count INTEGER,
             win_count INTEGER
         );
+    """)
+
+    con.execute("""
+        CREATE TABLE instance_locks (
+            symbol TEXT NOT NULL,
+            trade_type TEXT NOT NULL,
+            running INTEGER NOT NULL DEFAULT 0,
+            pid INTEGER,
+            started_at TEXT,
+            updated_at TEXT,
+            PRIMARY KEY (symbol, trade_type)
+        );
     """)  
 
-thresholds = 'INSERT INTO thresholds (id, price, amount, threshold_hit, sold_at) values (?, ?, ?, ?, ?)'
-data1 = [
-    (1, 14200, 0.05, 'N', None),
-    (2, 14900, 0.05, 'N', None),
-    (3, 15500, 0.05, 'N', None),
-    (4, 16500, 0.05, 'N', None)
-]
+# Note: No default data inserted
+# Each instance will insert its own data per symbol when started
+# Database is now ready for multi-instance usage
 
-hopper = 'INSERT INTO hopper (id, amount) values (?, ?)'
-data2 = [
-    (1, 0)
-]
-
-available_funds = 'INSERT INTO available_funds (id, account_balance, coin_hopper) values (?, ?, ?)'
-data3= [
-    (1, 0, 0)
-]
-
-stoploss = 'INSERT INTO stoploss (id, stop_value) values (?, ?)'
-data4 = [
-    (1, None)
-]
-
-win_tracker = 'INSERT INTO win_tracker (id, price_at_deposit, price_at_buy, buy_count, win_count) values (?, ?, ?, ?, ?)'
-data5= [
-    (1, None, None, 0, 0)
-]
-
-with con:
-    con.executemany(thresholds, data1) 
-    con.executemany(hopper, data2)
-    con.executemany(available_funds, data3)
-    con.executemany(stoploss, data4)
-    con.executemany(win_tracker, data5)
+print("Database created successfully!")
+print("Tables: thresholds, hopper, available_funds, stoploss, win_tracker, instance_locks")
+print("All tables include 'symbol' column for multi-instance support")
