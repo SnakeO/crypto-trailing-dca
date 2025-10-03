@@ -101,9 +101,14 @@ class CoinbasePro():
         product_id = self._convert_symbol(market)
         product = self.client.get_product(product_id)
 
+        # SDK returns GetProductResponse object, convert to dict
+        if hasattr(product, '__dict__'):
+            product_dict = product.__dict__
+        else:
+            product_dict = dict(product)
+
         # Extract price from product data
-        # The price is in the 'price' field or 'quote_increment' area
-        price = float(product.get('price', 0))
+        price = float(product_dict.get('price', 0))
 
         return price
 
@@ -117,13 +122,21 @@ class CoinbasePro():
         Returns:
             Available balance as float
         """
-        accounts = self.client.get_accounts()
+        accounts_response = self.client.get_accounts()
+
+        # SDK returns object, convert to dict
+        if hasattr(accounts_response, '__dict__'):
+            accounts_dict = accounts_response.__dict__
+        else:
+            accounts_dict = dict(accounts_response)
 
         # Find account matching the currency
-        for account in accounts.get('accounts', []):
-            if account.get('currency') == coin:
-                available_balance = account.get('available_balance', {})
-                return float(available_balance.get('value', 0))
+        for account in accounts_dict.get('accounts', []):
+            account_dict = account.__dict__ if hasattr(account, '__dict__') else dict(account)
+            if account_dict.get('currency') == coin:
+                available_balance = account_dict.get('available_balance', {})
+                balance_dict = available_balance.__dict__ if hasattr(available_balance, '__dict__') else dict(available_balance)
+                return float(balance_dict.get('value', 0))
 
         return 0.0
 
