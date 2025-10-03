@@ -89,25 +89,40 @@ This creates `exit_strategy.db` which persists your:
 
 ```
 $ python main.py --help
-usage: main.py [-h] --symbol SYMBOL --size SIZE --type TYPE [--interval INTERVAL] [--split SPLIT]
+usage: main.py [-h] --symbol SYMBOL (--size SIZE | --distance DISTANCE) --type TYPE [--interval INTERVAL] [--split SPLIT] [--simple] [--DCA THRESHOLDS]
 
 optional arguments:
-  -h, --help           show this help message and exit
-  --symbol SYMBOL      Market Symbol (e.g., BTC/USD, ETH/USD)
-  --size SIZE          The decimal value of the percentage that the stop loss should be placed above or below current price (e.g., 0.05, 0.10)
-  --type TYPE          Specify whether the trailing stop loss should be in buying or selling mode. (e.g., 'buy' or 'sell')
-  --interval INTERVAL  How often the bot should check for price changes (default: 5 seconds)
-  --split SPLIT        How many trading pairs should we allocate our funds between? (e.g., if ETH/USD and BTC/USD simultaneously: 2, if ETH/USD only: 1)
+  -h, --help            show this help message and exit
+  --symbol SYMBOL       Market Symbol (e.g., BTC/USD, ETH/USD, DOGE/USD)
+  --size SIZE           Percentage-based stop loss distance (e.g., 0.05 = 5%, 0.10 = 10%)
+  --distance DISTANCE   Absolute/scalar stop loss distance in price units (e.g., 0.01 = $0.01, 100 = $100)
+  --type TYPE           Specify whether the trailing stop loss should be in buying or selling mode. (e.g., 'buy' or 'sell')
+  --interval INTERVAL   How often the bot should check for price changes (default: 5 seconds)
+  --split SPLIT         How many trading pairs should we allocate our funds between? (default: 1)
+  --simple              Simple mode: Use full balance with trailing stop (no threshold ladder)
+  --DCA THRESHOLDS      Comma-delimited DCA thresholds as PRICE:AMOUNT pairs
 ```
 
 **Examples**
 
 ```bash
-# Sell mode: Trail stop loss upward as price rises
+# Sell mode with percentage-based trailing stop (5%)
 python3 src/main.py --symbol BTC/USD --size 0.05 --type sell --interval 5
 
-# Buy mode: Wait for dips, trail stop loss downward
-python3 src/main.py --symbol ETH/USD --size 0.10 --type buy --interval 5 --split 1
+# Sell mode with absolute distance trailing stop ($100)
+python3 src/main.py --symbol BTC/USD --distance 100 --type sell --interval 5
+
+# Buy mode with percentage-based stop (10%)
+python3 src/main.py --symbol ETH/USD --size 0.10 --type buy --interval 5
+
+# Simple mode with absolute distance stop ($0.01 trailing)
+python3 src/main.py --symbol DOGE/USD --distance 0.01 --type sell --simple
+
+# Default DCA mode with 4-tier ladder (percentage-based stop)
+python3 src/main.py --symbol DOGE/USD --size 0.05 --type sell
+
+# Custom DCA thresholds with absolute distance stop
+python3 src/main.py --symbol DOGE/USD --distance 0.01 --type sell --DCA '0.30:100,0.40:150,0.50:200'
 ```
 
 **Important notes**
@@ -122,15 +137,21 @@ python3 src/main.py --symbol ETH/USD --size 0.10 --type buy --interval 5 --split
 
 **--type buy**
 
-If the **buy** option is set, the bot will initially place a stop-loss (100 * `size`)% **above** the current market price (e.g., (100 * 0.05 = 5%)). As the price goes lower, the stop-loss will get dragged with it, staying no higher than the size specified. Once the price crosses the stop-loss price, a buy order is executed.
+If the **buy** option is set, the bot will initially place a stop-loss **above** the current market price. As the price goes lower, the stop-loss will get dragged with it, staying no higher than the specified distance. Once the price crosses the stop-loss price, a buy order is executed.
 
 **--type sell**
 
-If the **sell** option is set, the bot will initially place a stop-loss (100 * `size`)% **below** the current market price (e.g., (100 * 0.05 = 5%)). As the price goes higher, the stop-loss will get dragged with it, staying no lower than the size specified. Once the price crosses the stop-loss price, a sell order is executed.
+If the **sell** option is set, the bot will initially place a stop-loss **below** the current market price. As the price goes higher, the stop-loss will get dragged with it, staying no lower than the specified distance. Once the price crosses the stop-loss price, a sell order is executed.
 
-**--size**
+**--size** (percentage mode)
 
-This is the percentage difference you would like the stop-loss to be retained at. The difference between the current price and stop-loss will never be larger than this amount.
+This is the percentage difference you would like the stop-loss to be retained at. For example, `--size 0.05` means 5% distance. The difference between the current price and stop-loss will never be larger than this percentage.
+
+**--distance** (absolute mode)
+
+This is the absolute dollar/price distance you would like the stop-loss to be retained at. For example, `--distance 0.01` means $0.01 distance, `--distance 100` means $100 distance. The difference between the current price and stop-loss will never be larger than this absolute amount.
+
+**Note:** You must specify either `--size` OR `--distance`, not both.
 
 ## Overview
 

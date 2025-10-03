@@ -11,7 +11,7 @@ logger = get_logger(__file__)
 
 class StopTrail():
 
-	def __init__(self, market, type, stopsize, interval, split, simple_mode=False, dca_config=None):
+	def __init__(self, market, type, stopsize, interval, split, simple_mode=False, dca_config=None, stop_mode='percentage'):
 
 		logger.warning('Initializing bot...')
 
@@ -24,12 +24,18 @@ class StopTrail():
 		# set our variables
 		self.market = market
 		self.type = type
-		self.stopsize = stopsize
 		self.interval = interval
 		self.split = split
 		self.simple_mode = simple_mode
 		self.dca_config_raw = dca_config  # Store raw config for later processing
 		self.running = False
+
+		# Stop loss mode: 'percentage' or 'absolute'
+		self.stop_mode = stop_mode
+		if stop_mode == 'percentage':
+			self.stopsize = stopsize  # Percentage (e.g., 0.05 = 5%)
+		else:
+			self.stop_distance = stopsize  # Absolute distance in price units
 
 		# Get current price and ACTUAL balances from Coinbase
 		self.tracked_price = self.coinbasepro.get_price(self.market)
@@ -102,7 +108,38 @@ class StopTrail():
 			 self.con.commit()
 			 self.con.close()
 			 logger.info('Database closed')
-			
+
+
+	def calculate_stop_from_price(self, price, direction='below'):
+		"""
+		Calculate stop loss value based on mode (percentage or absolute).
+
+		Args:
+			price: Current price
+			direction: 'below' for sell mode (stop below price), 'above' for buy mode (stop above price)
+
+		Returns:
+			Stop loss price
+		"""
+		if self.stop_mode == 'percentage':
+			if direction == 'below':
+				return price - (price * self.stopsize)
+			else:
+				return price + (price * self.stopsize)
+		else:  # absolute mode
+			if direction == 'below':
+				return price - self.stop_distance
+			else:
+				return price + self.stop_distance
+
+
+	def get_stop_description(self):
+		"""Get human-readable description of stop distance."""
+		if self.stop_mode == 'percentage':
+			return "%.2f%%" % (self.stopsize * 100)
+		else:
+			return "$%.4f" % self.stop_distance
+
 
 	def setup_dca_thresholds(self):
 		"""
@@ -279,12 +316,12 @@ class StopTrail():
 		#If stoploss is already set retrieve that value from the stoploss table. If not, set the stoploss from the market price.
 		self.stoploss_initialized = True
 		self.tracked_price = self.price
-		
+
 		if self.type == "buy":
 
-			lower_threshold = self.price_at_deposit - (self.price_at_deposit * self.stopsize)
+			lower_threshold = self.calculate_stop_from_price(self.price_at_deposit, 'below')
 			self.stoploss = self.price_at_deposit
-			logger.warn('Price has dropped at least %.2f%% from deposit price and hit our lower threshold of %.2f' % ((self.stopsize*100), lower_threshold))
+			logger.warn('Price has dropped at least %s from deposit price and hit our lower threshold of %.2f' % (self.get_stop_description(), lower_threshold))
 
 			# write the stoploss value to the stoploss table
 			self.cursor = self.con.cursor()
@@ -296,9 +333,9 @@ class StopTrail():
 			return self.stoploss, self.stoploss_initialized, self.tracked_price
 
 
-		elif self.type == "sell": 
-			
-			self.stoploss = (self.price - (self.price * self.stopsize)) 
+		elif self.type == "sell":
+
+			self.stoploss = self.calculate_stop_from_price(self.price, 'below')
 			self.cursor = self.con.cursor()
 			self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
 			logger.warn('Stop loss initialized at: ' + str(self.stoploss))
@@ -316,8 +353,9 @@ class StopTrail():
 					logger.warn('New high observed: %.2f' % self.price)
 					self.tracked_price = self.price
 
-				if (self.price - (self.price * self.stopsize)) > self.stoploss:
-					self.stoploss = (self.price - (self.price * self.stopsize))
+				new_stop = self.calculate_stop_from_price(self.price, 'below')
+				if new_stop > self.stoploss:
+					self.stoploss = new_stop
 					self.cursor = self.con.cursor()
 					self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
 					self.cursor.close()
@@ -332,11 +370,12 @@ class StopTrail():
 					logger.warn('New low observed: %.2f' % self.price)
 					self.tracked_price = self.price
 
-				# enter logic to track current balance, if no balance, don't update the stoploss. Wait for us to deposit some USD. 	
+				# enter logic to track current balance, if no balance, don't update the stoploss. Wait for us to deposit some USD.
 				if self.balance > 50:
 
-					if (self.price + (self.price * self.stopsize)) < self.stoploss:
-						self.stoploss = (self.price + (self.price * self.stopsize))
+					new_stop = self.calculate_stop_from_price(self.price, 'above')
+					if new_stop < self.stoploss:
+						self.stoploss = new_stop
 						self.cursor = self.con.cursor()
 						self.cursor.execute("REPLACE INTO stoploss (id, stop_value) VALUES (?, ?)", (1, self.stoploss))
 						self.cursor.close()
@@ -579,11 +618,11 @@ class StopTrail():
 		self.cursor.close()
 
 		price_at_deposit = data[1]
-		upper_threshold = price_at_deposit + (price_at_deposit * self.stopsize)
-		lower_threshold = price_at_deposit - (price_at_deposit * self.stopsize)
+		upper_threshold = self.calculate_stop_from_price(price_at_deposit, 'above')
+		lower_threshold = self.calculate_stop_from_price(price_at_deposit, 'below')
 
 		if self.price > upper_threshold:
-			logger.warn('Price has risen %.2f%% from deposit price and hit our upper threshold of %.2f' % ((self.stopsize*100), upper_threshold))
+			logger.warn('Price has risen %s from deposit price and hit our upper threshold of %.2f' % (self.get_stop_description(), upper_threshold))
 			self.stoploss = upper_threshold
 			self.execute_buy()
 
@@ -598,7 +637,7 @@ class StopTrail():
 
 		else:
 			if self.stoploss_initialized == False:
-				logger.info('Price is still +/- %.2f%% from deposit price of %.2f (range: %.2f to %.2f). Taking no action until movement outside of this range.' % ((self.stopsize*100), price_at_deposit, upper_threshold, lower_threshold))
+				logger.info('Price is still +/- %s from deposit price of %.2f (range: %.2f to %.2f). Taking no action until movement outside of this range.' % (self.get_stop_description(), price_at_deposit, upper_threshold, lower_threshold))
 			
 
 
@@ -626,7 +665,11 @@ class StopTrail():
 		else:
 			logger.info('Stop loss: N/A')
 
-		logger.info("Trailing stop: %.2f percent" % (self.stopsize*100))
+		if self.stop_mode == 'percentage':
+			logger.info("Trailing stop: %.2f percent" % (self.stopsize*100))
+		else:
+			logger.info("Trailing stop: $%.4f absolute" % self.stop_distance)
+
 		logger.info("Last price: %.2f" % self.price)
 		logger.info("---------------------")
 

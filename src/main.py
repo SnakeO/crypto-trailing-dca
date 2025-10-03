@@ -101,7 +101,15 @@ def main(options):
         # Will be generated inside StopTrail after getting current price and balance
         dca_config = 'DEFAULT'
 
-    task = StopTrail(options.symbol, options.type, options.size, options.interval, options.split, options.simple, dca_config)
+    # Determine stop loss mode (percentage vs absolute distance)
+    if options.distance is not None:
+        stop_mode = 'absolute'
+        stop_value = options.distance
+    else:
+        stop_mode = 'percentage'
+        stop_value = options.size
+
+    task = StopTrail(options.symbol, options.type, stop_value, options.interval, options.split, options.simple, dca_config, stop_mode)
     task.run()
 
 if __name__ == "__main__":
@@ -109,11 +117,17 @@ if __name__ == "__main__":
         description='Cryptocurrency trailing stop-loss bot for Coinbase Advanced Trade API',
         epilog='''
 Examples:
-  Simple mode (full balance, no DCA):
+  Simple mode with percentage-based stop (5%% trailing):
     python main.py --symbol DOGE/USD --type sell --size 0.05 --simple
 
-  Default DCA (4-tier: +10%%/+20%%/+30%%/+50%%, 25%% each):
+  Simple mode with absolute distance stop ($0.01 trailing):
+    python main.py --symbol DOGE/USD --type sell --distance 0.01 --simple
+
+  Default DCA with percentage stop (4-tier: +10%%/+20%%/+30%%/+50%%, 25%% each):
     python main.py --symbol DOGE/USD --type sell --size 0.05
+
+  Default DCA with absolute distance stop:
+    python main.py --symbol BTC/USD --type sell --distance 100 --simple
 
   Custom DCA with absolute prices:
     python main.py --symbol DOGE/USD --type sell --size 0.05 --DCA '0.30:100,0.40:150,0.50:200'
@@ -124,7 +138,12 @@ Examples:
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('--symbol', type=str, help='Market Symbol (Ex: BTC/USD, DOGE/USD, ETH/USD)', required=True)
-    parser.add_argument('--size', type=float, help='Decimal percentage for stop loss distance (Ex: 0.05 = 5%%, 0.10 = 10%%)', required=True)
+
+    # Mutually exclusive group for stop loss distance
+    stop_group = parser.add_mutually_exclusive_group(required=True)
+    stop_group.add_argument('--size', type=float, help='Percentage-based stop loss distance (Ex: 0.05 = 5%%, 0.10 = 10%%)')
+    stop_group.add_argument('--distance', type=float, help='Absolute/scalar stop loss distance in price units (Ex: 0.01 = $0.01, 100 = $100)')
+
     parser.add_argument('--type', type=str, help="Trading mode: 'buy' or 'sell'", required=True)
     parser.add_argument('--interval', type=float, help="How often to check for price changes in seconds (default: 5)", default=5)
     parser.add_argument('--split', type=int, help="How many trading pairs to split funds between (default: 1)", default=1)
