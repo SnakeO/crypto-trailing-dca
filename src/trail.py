@@ -136,6 +136,10 @@ class StopTrail():
 
 	def update_hopper(self):
 		if self.type == 'sell':
+			# Skip threshold checking in simple mode
+			if self.simple_mode:
+				return
+
 			self.cursor = self.con.cursor()
 			self.cursor.execute("SELECT Count(*) from thresholds WHERE threshold_hit = 'N';")
 			result = self.cursor.fetchone()
