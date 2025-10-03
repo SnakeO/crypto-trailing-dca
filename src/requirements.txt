@@ -6,3 +6,4 @@ config
 configparser
 datetime
 pandas
+prompt_toolkit
