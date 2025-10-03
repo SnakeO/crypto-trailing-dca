@@ -12,7 +12,7 @@ logger = get_logger(__file__)
 
 class StopTrail():
 
-	def __init__(self, market, type, stopsize, interval, split):
+	def __init__(self, market, type, stopsize, interval, split, simple_mode=False):
 
 		logger.warning('Initializing bot...')
 
@@ -21,21 +21,40 @@ class StopTrail():
 			api_key=Config.get_value('api','api_key_name'),
 			api_secret=Config.get_value('api','api_private_key')
 		)
-		
+
 		# set our variables
 		self.market = market
 		self.type = type
 		self.stopsize = stopsize
 		self.interval = interval
 		self.split = split
+		self.simple_mode = simple_mode
 		self.running = False
+
+		# Get current price and ACTUAL balances from Coinbase
 		self.tracked_price = self.coinbasepro.get_price(self.market)
-		self.tracked_balance = self.coinbasepro.get_balance(self.market.split("/")[1])
+		base_currency = self.market.split("/")[0]  # e.g., DOGE
+		quote_currency = self.market.split("/")[1]  # e.g., USD
+
+		self.real_base_balance = self.coinbasepro.get_balance(base_currency)
+		self.real_quote_balance = self.coinbasepro.get_balance(quote_currency)
+		self.tracked_balance = self.real_quote_balance  # For compatibility
+
+		# Display actual account balances
+		logger.warning('=' * 60)
+		logger.warning('COINBASE ACCOUNT BALANCES:')
+		logger.warning('  %s: %.4f' % (base_currency, self.real_base_balance))
+		logger.warning('  %s: %.2f' % (quote_currency, self.real_quote_balance))
+		logger.warning('  Current %s Price: $%.4f' % (base_currency, self.tracked_price))
+		logger.warning('=' * 60)
 
 		if self.split == 1:
 			logger.warning('Running in single coin mode: %s' % self.market)
 		else:
 			logger.warning('Running in multiple coin mode (%s)' % self.split)
+
+		if self.simple_mode:
+			logger.warning('SIMPLE MODE: Using full balance with trailing stop (no threshold ladder)')
 		
 		# open db connection and check for a persisted stoploss value
 		self.con = sl.connect("exit_strategy.db")
@@ -87,12 +106,31 @@ class StopTrail():
 			first_row = self.cursor.fetchone()
 			self.cursor.close()
 			hopper_amount = first_row[1]
-			if hopper_amount > 0:
-				logger.warn('Hopper already set at: %.4f' % hopper_amount)
-			else:
-				logger.info('No hopper previously set. Starting at 0.')
-			self.hopper = hopper_amount
 
+			# Auto-initialize hopper if empty
+			if hopper_amount == 0:
+				if self.simple_mode:
+					# Simple mode: use full base balance
+					hopper_amount = self.real_base_balance
+					logger.warning('SIMPLE MODE: Auto-loading hopper with full balance: %.4f %s' % (hopper_amount, self.market.split("/")[0]))
+				elif self.real_base_balance > 0:
+					# Ask user or auto-load
+					logger.warning('You have %.4f %s in your account but hopper is empty' % (self.real_base_balance, self.market.split("/")[0]))
+					logger.warning('Auto-loading hopper with your balance for simple trailing stop')
+					hopper_amount = self.real_base_balance
+				else:
+					logger.info('No hopper previously set. Starting at 0.')
+
+				# Save to database
+				if hopper_amount > 0:
+					self.cursor = self.con.cursor()
+					self.cursor.execute("REPLACE INTO hopper (id, amount) VALUES (1, ?)", (hopper_amount,))
+					self.cursor.close()
+					self.con.commit()
+			else:
+				logger.warn('Hopper already set at: %.4f' % hopper_amount)
+
+			self.hopper = hopper_amount
 			return self.hopper
 
 
@@ -502,8 +540,15 @@ class StopTrail():
 		logger.info("Market: %s" % self.market)
 
 		if self.type == "sell":
-			logger.info("Available to sell: %.4f %s" % (self.hopper, self.market.split("/")[0]))
-		else: 
+			base_currency = self.market.split("/")[0]
+			logger.info("Coinbase Balance: %.4f %s" % (self.real_base_balance, base_currency))
+			if self.simple_mode:
+				logger.info("Trading with FULL balance (simple mode)")
+			else:
+				logger.info("Available to sell (hopper): %.4f %s" % (self.hopper, base_currency))
+				if self.hopper < self.real_base_balance:
+					logger.info("  (Thresholds not hit yet - hopper < balance)")
+		else:
 			logger.info("Total USD balance: $%.2f" % self.balance)
 			if self.balance > 50:
 				logger.info("%s available to purchase %s: $%.2f" % (self.market.split("/")[1], self.market.split("/")[0], self.coin_hopper))
