@@ -55,6 +55,32 @@ YOUR_PRIVATE_KEY_HERE
 
 
 
+## Initialize Database
+
+**Before first run**, you must initialize the exit strategy database:
+
+```bash
+cd src
+python create-db.py
+```
+
+**For Sell Mode**: Edit `src/create-db.py` (lines 48-53) to customize your exit thresholds before running:
+
+```python
+data1 = [
+    (1, 14200, 0.05, 'N', None),  # At $14,200, release 0.05 coins to sell
+    (2, 14900, 0.05, 'N', None),  # At $14,900, release 0.05 coins to sell
+    (3, 15500, 0.05, 'N', None),  # At $15,500, release 0.05 coins to sell
+    (4, 16500, 0.05, 'N', None),  # At $16,500, release 0.05 coins to sell
+]
+```
+
+This creates `exit_strategy.db` which persists your:
+- Exit price thresholds and amounts (sell mode)
+- Current stop loss value (both modes)
+- Trading performance statistics (buy mode)
+- Balance tracking (buy mode)
+
 ## Running
 
 **Usage**
@@ -68,17 +94,26 @@ optional arguments:
   --symbol SYMBOL      Market Symbol (e.g., BTC/USD, ETH/USD)
   --size SIZE          The decimal value of the percentage that the stop loss should be placed above or below current price (e.g., 0.05, 0.10)
   --type TYPE          Specify whether the trailing stop loss should be in buying or selling mode. (e.g., 'buy' or 'sell')
-  --interval INTERVAL  How often the bot should check for price changes
-  --split SPLIT        How many trading pairs should we allocate our funds between? (e.g., if ETH/USD and BTC/USD simultaneously: 2, if ETH/USD only: 1
-```
-```
-$ python3 main.py --symbol BTC/USD --size 0.05 --type sell
+  --interval INTERVAL  How often the bot should check for price changes (default: 5 seconds)
+  --split SPLIT        How many trading pairs should we allocate our funds between? (e.g., if ETH/USD and BTC/USD simultaneously: 2, if ETH/USD only: 1)
 ```
 
+**Examples**
 
-**Important note**
+```bash
+# Sell mode: Trail stop loss upward as price rises
+python3 src/main.py --symbol BTC/USD --size 0.05 --type sell --interval 5
 
-If you are running in sell mode, it is assumed that you have already purchased the coins. If you are running in buy mode, it will use the total available balance in the base (USDT, BTC, etc).
+# Buy mode: Wait for dips, trail stop loss downward
+python3 src/main.py --symbol ETH/USD --size 0.10 --type buy --interval 5 --split 1
+```
+
+**Important notes**
+
+- **Sell mode**: Assumes you already own the coins to sell
+- **Buy mode**: Uses total available balance in base currency (USD, etc.)
+- **Database persistence**: Bot state survives restarts via `exit_strategy.db`
+- **Reset state**: Delete `exit_strategy.db` and re-run `create-db.py` for fresh start
 
 
 ## Parameters
