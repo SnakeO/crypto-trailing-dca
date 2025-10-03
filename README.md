@@ -47,9 +47,11 @@ Modify `/conf/settings.ini` and insert your CDP API credentials:
 [api]
 api_key_name=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
 api_private_key=-----BEGIN EC PRIVATE KEY-----
-YOUR_PRIVATE_KEY_HERE
------END EC PRIVATE KEY-----
+    YOUR_PRIVATE_KEY_HERE
+    -----END EC PRIVATE KEY-----
 ```
+
+**Note**: Multiline PEM keys must have continuation lines indented (with spaces or tabs) for proper ConfigParser parsing.
 
 **Note**: Legacy Coinbase Pro credentials (`api_key`, `api_secret`, `password`) are no longer supported as of February 5, 2025.
 

@@ -55,10 +55,16 @@ class StopTrail():
 
 			
 	def __del__(self):
-		message = ('Program has exited: %s.' % self.market)
-		send_sns(message)
-		logger.warning(message)
-		self.close_db()
+		# Handle partial initialization (if __init__ failed)
+		if hasattr(self, 'market'):
+			message = ('Program has exited: %s.' % self.market)
+			try:
+				send_sns(message)
+			except Exception:
+				pass  # SNS not configured or failed, ignore
+			logger.warning(message)
+		if hasattr(self, 'con'):
+			self.close_db()
 
 
 	def __exit__(self, exc_type, exc_value, traceback): 

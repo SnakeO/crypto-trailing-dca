@@ -48,17 +48,29 @@ def get_logger(file_name):
 
 
 def send_sns(message):
-    sns = boto3.client(
-        "sns",
-        aws_access_key_id = Config.get_value('aws','aws_access_key_id'),
-        aws_secret_access_key = Config.get_value('aws','aws_secret_access_key'),
-        region_name = Config.get_value('aws','region_name')
-    )
+    """Send SNS notification. Silently fails if AWS credentials not configured."""
+    try:
+        region = Config.get_value('aws','region_name')
+        phone = Config.get_value('sns','phone_number')
 
-    sns.publish(
-        PhoneNumber = Config.get_value('sns','phone_number'),
-        Message = message
-    )
+        # Skip if not configured
+        if not region or not phone:
+            return
+
+        sns = boto3.client(
+            "sns",
+            aws_access_key_id = Config.get_value('aws','aws_access_key_id'),
+            aws_secret_access_key = Config.get_value('aws','aws_secret_access_key'),
+            region_name = region
+        )
+
+        sns.publish(
+            PhoneNumber = phone,
+            Message = message
+        )
+    except Exception:
+        # SNS is optional - don't fail if not configured
+        pass
 
 
 def round_decimals_down(number:float, decimals:int=2):
