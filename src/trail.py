@@ -1,4 +1,3 @@
-import config
 import datetime
 import logging
 import time
@@ -12,7 +11,7 @@ logger = get_logger(__file__)
 
 class StopTrail():
 
-	def __init__(self, market, type, stopsize, interval, split, simple_mode=False):
+	def __init__(self, market, type, stopsize, interval, split, simple_mode=False, dca_config=None):
 
 		logger.warning('Initializing bot...')
 
@@ -29,6 +28,7 @@ class StopTrail():
 		self.interval = interval
 		self.split = split
 		self.simple_mode = simple_mode
+		self.dca_config_raw = dca_config  # Store raw config for later processing
 		self.running = False
 
 		# Get current price and ACTUAL balances from Coinbase
@@ -55,7 +55,7 @@ class StopTrail():
 
 		if self.simple_mode:
 			logger.warning('SIMPLE MODE: Using full balance with trailing stop (no threshold ladder)')
-		
+
 		# open db connection and check for a persisted stoploss value
 		self.con = sl.connect("exit_strategy.db")
 		self.cursor = self.con.cursor()
@@ -70,6 +70,11 @@ class StopTrail():
 		else:
 			logger.info('No stoploss currently set')
 			self.stoploss_initialized = False
+
+		# Setup DCA thresholds based on configuration
+		if not self.simple_mode and self.type == 'sell':
+			self.setup_dca_thresholds()
+
 		self.hopper = self.initialize_hopper()
 
 			
@@ -98,6 +103,65 @@ class StopTrail():
 			 self.con.close()
 			 logger.info('Database closed')
 			
+
+	def setup_dca_thresholds(self):
+		"""
+		Setup DCA threshold ladder in database based on configuration.
+		Handles three modes: custom DCA string, DEFAULT, or None (use existing DB).
+		"""
+		from main import parse_dca_config, generate_default_dca
+
+		if self.dca_config_raw == 'DEFAULT':
+			# Generate sane defaults
+			thresholds = generate_default_dca(self.tracked_price, self.real_base_balance)
+			logger.warning('=' * 60)
+			logger.warning('DCA EXIT STRATEGY (default):')
+			mode = 'default'
+		elif self.dca_config_raw:
+			# Parse custom DCA configuration
+			thresholds = parse_dca_config(self.dca_config_raw, self.tracked_price)
+			logger.warning('=' * 60)
+			logger.warning('DCA EXIT STRATEGY (custom):')
+			mode = 'custom'
+		else:
+			# No DCA config - use existing database thresholds
+			logger.info('Using existing database thresholds')
+			return
+
+		# Clear existing thresholds
+		self.cursor = self.con.cursor()
+		self.cursor.execute("DELETE FROM thresholds")
+		self.cursor.close()
+		self.con.commit()
+
+		# Reset hopper
+		self.cursor = self.con.cursor()
+		self.cursor.execute("UPDATE hopper SET amount = 0 WHERE id = 1")
+		self.cursor.close()
+		self.con.commit()
+
+		# Insert new thresholds
+		cumulative_amount = 0
+		base_currency = self.market.split("/")[0]
+
+		for i, (price, amount) in enumerate(thresholds):
+			cumulative_amount += amount
+			self.cursor = self.con.cursor()
+			self.cursor.execute(
+				"INSERT INTO thresholds (id, price, amount, threshold_hit, sold_at) VALUES (?, ?, ?, 'N', NULL)",
+				(i + 1, price, amount)
+			)
+			self.cursor.close()
+			self.con.commit()
+
+			# Display threshold
+			percent_gain = ((price / self.tracked_price) - 1) * 100
+			logger.warning('  $%.4f (+%.1f%%) → Sell %.4f %s (hopper: %.4f)' %
+			               (price, percent_gain, amount, base_currency, cumulative_amount))
+
+		logger.warning('Total: %.4f %s across %d thresholds' %
+		               (cumulative_amount, base_currency, len(thresholds)))
+		logger.warning('=' * 60)
 
 	def initialize_hopper(self):
 		if self.type == "sell":
