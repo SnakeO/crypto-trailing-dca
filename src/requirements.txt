@@ -7,3 +7,6 @@ configparser
 datetime
 pandas
 prompt_toolkit
+textual>=0.40.0
+textual-plotext>=0.2.0
+plotext>=5.0.0

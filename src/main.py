@@ -487,6 +487,9 @@ Examples:
 
   Reset stuck instance lock:
     python main.py --symbol DOGE/USD --type sell --reset-lock
+
+  Launch with beautiful Textual UI:
+    python main.py --ui
         ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -507,6 +510,10 @@ Examples:
                             "Example: '0.30:100,0.40:150' or '+10%%:100,+20%%:150'")
     parser.add_argument('--reset-lock', action='store_true',
                        help="Reset instance lock for the specified symbol and type (use if previous instance crashed)")
+    parser.add_argument('--ui', action='store_true',
+                       help="Launch with Textual TUI interface (default: CLI mode)")
+    parser.add_argument('--no-ui', action='store_true',
+                       help="Force CLI mode (useful for scripting/headless)")
 
     options = parser.parse_args()
 
@@ -518,5 +525,12 @@ Examples:
         reset_instance_lock(options.symbol, options.type)
         sys.exit(0)
 
+    # Handle --ui flag - launch Textual interface
+    if options.ui and not options.no_ui:
+        from ui.app import run_ui
+        run_ui()
+        sys.exit(0)
+
+    # Default: CLI mode
     main(options)
 

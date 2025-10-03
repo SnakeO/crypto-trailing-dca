@@ -1,0 +1,259 @@
+/* Crypto Trading Bot - Textual Theme */
+
+/* Global Colors */
+$background: #0c1116;
+$surface: #1a1f2e;
+$primary: #00d9ff;
+$success: #00ff88;
+$warning: #ffaa00;
+$error: #ff0055;
+$accent: #cc88ff;
+$text: #e4e4e7;
+$text-muted: #71717a;
+
+Screen {
+    background: $background;
+    color: $text;
+}
+
+/* Header Styling */
+Header {
+    dock: top;
+    height: 3;
+    background: $surface;
+    color: $primary;
+    content-align: center middle;
+    border: heavy $primary;
+}
+
+/* Footer Styling */
+Footer {
+    dock: bottom;
+    height: 3;
+    background: $surface;
+    color: $text-muted;
+    border: heavy $primary;
+}
+
+/* Container Styling */
+Container {
+    background: $background;
+    border: round $primary;
+    padding: 1 2;
+    margin: 1;
+}
+
+.stats-container {
+    background: $surface;
+    border: heavy $success;
+    padding: 1 2;
+    height: auto;
+}
+
+.chart-container {
+    background: $surface;
+    border: heavy $accent;
+    padding: 0 1;
+    height: 20;
+}
+
+.thresholds-container {
+    background: $surface;
+    border: heavy $warning;
+    padding: 1 2;
+    height: auto;
+}
+
+.log-container {
+    background: $surface;
+    border: heavy $text-muted;
+    padding: 1 2;
+    height: 12;
+}
+
+/* Button Styling */
+Button {
+    min-width: 16;
+    height: 3;
+    border: heavy $primary;
+    background: $surface;
+    color: $primary;
+    text-style: bold;
+    margin: 0 1;
+}
+
+Button:hover {
+    background: $primary;
+    color: $background;
+    border: heavy $success;
+}
+
+Button.-primary {
+    background: $primary;
+    color: $background;
+    border: heavy $primary;
+}
+
+Button.-primary:hover {
+    background: $success;
+    border: heavy $success;
+}
+
+/* Input Styling */
+Input {
+    border: round $primary;
+    background: $surface;
+    color: $text;
+    margin: 0 1;
+}
+
+Input:focus {
+    border: round $success;
+}
+
+/* Label Styling */
+Label {
+    color: $text;
+    padding: 0 1;
+}
+
+.label-primary {
+    color: $primary;
+    text-style: bold;
+}
+
+.label-success {
+    color: $success;
+    text-style: bold;
+}
+
+.label-warning {
+    color: $warning;
+    text-style: bold;
+}
+
+.label-error {
+    color: $error;
+    text-style: bold;
+}
+
+.label-muted {
+    color: $text-muted;
+}
+
+/* RadioSet Styling */
+RadioSet {
+    background: $surface;
+    border: round $primary;
+    padding: 1 2;
+    margin: 1 0;
+}
+
+RadioButton {
+    color: $text;
+}
+
+RadioButton:checked {
+    color: $success;
+}
+
+/* Select/Dropdown Styling */
+Select {
+    border: round $primary;
+    background: $surface;
+    color: $text;
+    margin: 0 1;
+}
+
+Select:focus {
+    border: round $success;
+}
+
+/* ProgressBar Styling */
+ProgressBar {
+    height: 1;
+    bar-color: $success;
+    background: $surface;
+    border: none;
+}
+
+.threshold-progress {
+    margin: 0 1;
+}
+
+/* Digits Widget (for large numbers) */
+Digits {
+    color: $primary;
+    text-style: bold;
+}
+
+.price-digits {
+    color: $success;
+}
+
+.stop-digits {
+    color: $warning;
+}
+
+/* RichLog Styling */
+RichLog {
+    background: $surface;
+    border: none;
+    color: $text;
+}
+
+/* Static Text Styling */
+Static {
+    background: $surface;
+    color: $text;
+    padding: 1 2;
+}
+
+.section-title {
+    color: $primary;
+    text-style: bold;
+    text-align: center;
+    margin: 0 0 1 0;
+}
+
+/* DataTable Styling */
+DataTable {
+    background: $surface;
+    border: round $primary;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary 20%;
+}
+
+/* Horizontal Layout */
+.horizontal {
+    layout: horizontal;
+    height: auto;
+}
+
+/* Vertical Layout */
+.vertical {
+    layout: vertical;
+    height: auto;
+}
+
+/* Setup Screen Specific */
+.setup-section {
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+    margin: 1 0;
+    height: auto;
+}
+
+.setup-title {
+    color: $accent;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+/* Animation */
+*:focus {
+    transition: border 200ms, background 200ms;
+}

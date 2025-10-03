@@ -12,9 +12,12 @@ logger = get_logger(__file__)
 
 class StopTrail():
 
-	def __init__(self, market, type, stopsize, interval, split, simple_mode=False, dca_config=None, stop_mode='percentage'):
+	def __init__(self, market, type, stopsize, interval, split, simple_mode=False, dca_config=None, stop_mode='percentage', ui_callback=None):
 
 		logger.warning('Initializing bot...')
+
+		# UI callback for Textual interface
+		self.ui_callback = ui_callback
 
 		# establish a connection with exchange
 		self.coinbasepro = CoinbasePro(
@@ -129,6 +132,15 @@ class StopTrail():
 			 self.con.commit()
 			 self.con.close()
 			 logger.info('Database closed')
+
+
+	def emit_event(self, event_type: str, data: dict):
+		"""Emit an event to the UI callback if registered."""
+		if self.ui_callback:
+			try:
+				self.ui_callback(event_type, data)
+			except Exception as e:
+				logger.error(f"Error in UI callback: {e}")
 
 
 	def ensure_instance_locks_table(self):
@@ -369,6 +381,13 @@ class StopTrail():
 						self.cursor.execute("REPLACE INTO hopper (id, symbol, amount) VALUES (?, ?, ?)", (1, self.market, self.hopper))
 						logger.warn('New hopper total: %.4f' % self.hopper)
 						logger.warn('Thresholds remaining: %s' % (int(remaining_rows)-1))
+						# Emit threshold hit event
+						self.emit_event('threshold_hit', {
+							'threshold': threshold,
+							'amount': exit_amount,
+							'hopper_total': self.hopper,
+							'remaining': int(remaining_rows)-1
+						})
 						# check to see if we have any remaining thesholds, if so, output the next threshold value
 						self.cursor.execute("SELECT Count(*) from thresholds WHERE symbol = ? AND threshold_hit = 'N'", (self.market,))
 						result = self.cursor.fetchone()
@@ -448,6 +467,11 @@ class StopTrail():
 					self.cursor.close()
 					self.con.commit()
 					logger.warn("Raised stop loss to %.2f" % (self.stoploss))
+					# Emit stop update event
+					self.emit_event('stop_update', {
+						'stop_loss': self.stoploss,
+						'direction': 'raised'
+					})
 
 				elif self.price <= self.stoploss:
 					self.execute_sell()
@@ -468,6 +492,11 @@ class StopTrail():
 						self.cursor.close()
 						self.con.commit()
 						logger.warn("Lowered stop loss to %.2f" % self.stoploss)
+						# Emit stop update event
+						self.emit_event('stop_update', {
+							'stop_loss': self.stoploss,
+							'direction': 'lowered'
+						})
 
 					elif self.price >= self.stoploss:
 						self.execute_buy()
@@ -533,11 +562,19 @@ class StopTrail():
 			size, price, status, done_reason = fetch_order['info']['size'], fetch_order['price'], fetch_order['info']['status'], fetch_order['info']['done_reason']
 
 			while pending:
-				if status == 'done' and done_reason == 'filled': 
+				if status == 'done' and done_reason == 'filled':
 					filled, sell_value, fee = fetch_order['amount'], fetch_order['cost'], fetch_order['fee']['cost']
 					pending = False
 					logger.warn("Sell order executed and filled successfully.")
 					logger.warn("Sold %.6f %s for %.2f %s. Fees: %.2f" % (filled, self.market.split("/")[0], sell_value, self.market.split("/")[1], fee))
+					# Emit trade execution event
+					self.emit_event('trade_executed', {
+						'type': 'sell',
+						'amount': filled,
+						'price': self.price,
+						'value': sell_value,
+						'fee': fee
+					})
 				elif status == 'done' and done_reason == 'cancelled':
 					pending = False
 					logger.warn('Sell order was canceled by exchange.')
@@ -612,6 +649,14 @@ class StopTrail():
 					message = "ORDER: Bought %.6f %s at %.2f for %.2f %s. Fees: %.2f" % (filled, self.market.split("/")[0], filled_price, sell_value, self.market.split("/")[1], fee)
 					send_sns(message)
 					logger.warn(message)
+					# Emit trade execution event
+					self.emit_event('trade_executed', {
+						'type': 'buy',
+						'amount': filled,
+						'price': filled_price,
+						'value': sell_value,
+						'fee': fee
+					})
 
 					# update win_tracker, add to the # of buys in the table, add to # of wins if it's a win
 					# output whether buy was a win, display % of buys that are wins
@@ -861,9 +906,25 @@ class StopTrail():
 					self.print_status()
 					self.update_stop()
 					self.update_hopper()
+					# Emit price update event
+					self.emit_event('price_update', {
+						'price': self.price,
+						'stop_loss': self.stoploss if self.stoploss_initialized else None,
+						'stop_initialized': self.stoploss_initialized,
+						'balance': self.real_base_balance,
+						'hopper': self.hopper
+					})
 			elif self.type == "buy":
 				if self.get_price():
 					self.get_balance()
 					#self.print_status()
 					self.update_stop()
+					# Emit price update event
+					self.emit_event('price_update', {
+						'price': self.price,
+						'stop_loss': self.stoploss if self.stoploss_initialized else None,
+						'stop_initialized': self.stoploss_initialized,
+						'balance': self.balance,
+						'hopper': self.coin_hopper
+					})
 			time.sleep(self.interval)
