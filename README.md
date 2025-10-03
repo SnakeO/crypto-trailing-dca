@@ -6,21 +6,52 @@ Implements dynamic, trailing stop loss functionality for Coinbase Pro. Designed 
 
 **Clone the repository**
 ```
-git clone https://github.com/efuerstenberg/crypto-trailing-stoploss
+git clone https://github.com/SnakeO/crypto-trailing-dca
 ```
 
 **Install required libraries**
 ```
 apt-get install python-pip -y
-pip install ccxt
+pip install -r src/requirements.txt
+```
+
+Or install manually:
+```
+pip install coinbase-advanced-py boto3 pandas
 ```
 
 
 ## Configure API keys
 
-Obtain an API key from Coinbase Pro with 'view' and 'trade' permissions enabled. 
+**IMPORTANT: Coinbase Pro API has been deprecated. This project now uses Coinbase Advanced Trade API (Feb 2025).**
 
-Then modify `/conf/settings.ini` and insert your API key, secret, and passcode.
+### Generate Coinbase CDP API Keys
+
+1. Visit the Coinbase Developer Platform: https://portal.cdp.coinbase.com/projects
+2. Sign in with your Coinbase account
+3. Create a new project or select an existing one
+4. Navigate to "API Keys" section
+5. Click "Create API Key"
+6. Select permissions: Enable **View** and **Trade** permissions
+7. Choose key type: **ES256** (ECDSA with P-256 curve) - EdDSA is NOT supported
+8. Click "Generate Key"
+9. **IMPORTANT**: Save the following information immediately (you won't be able to see the private key again):
+   - API Key Name (format: `organizations/{org_id}/apiKeys/{key_id}`)
+   - Private Key (PEM format, starts with `-----BEGIN EC PRIVATE KEY-----`)
+
+### Configure settings.ini
+
+Modify `/conf/settings.ini` and insert your CDP API credentials:
+
+```ini
+[api]
+api_key_name=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
+api_private_key=-----BEGIN EC PRIVATE KEY-----
+YOUR_PRIVATE_KEY_HERE
+-----END EC PRIVATE KEY-----
+```
+
+**Note**: Legacy Coinbase Pro credentials (`api_key`, `api_secret`, `password`) are no longer supported as of February 5, 2025.
 
 
 
@@ -94,6 +125,24 @@ In 'buy-mode', the bot will actively monitor the market price around a defined r
 
 ![image](https://user-images.githubusercontent.com/13890717/113211108-e1877f00-9229-11eb-971b-35af02e8d68f.png)
 
+
+## Migration from Legacy Coinbase Pro API
+
+If you're upgrading from an older version of this project that used Coinbase Pro API:
+
+1. **Generate new CDP API keys** following the instructions above
+2. **Update conf/settings.ini** with the new key format:
+   - Replace `api_key` with `api_key_name` (organizations format)
+   - Replace `api_secret` with `api_private_key` (EC PEM format)
+   - Remove `password` field (no longer used)
+3. **Apply the same changes to `[live_api]` and `[deposit]` sections**
+4. **Reinstall dependencies**: `pip install -r src/requirements.txt`
+5. **Test with small amounts first** to verify the migration was successful
+
+**Breaking Changes**:
+- Deposit functionality may have limited support - use Coinbase web interface for deposits
+- Symbol format is auto-converted (BTC/USD → BTC-USD) but behavior should remain the same
+- Error handling updated to work with new SDK exceptions
 
 ## License
 Released under GPLv3.

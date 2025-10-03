@@ -62,3 +62,11 @@ target/
 .tmp-creds
 .vscode
 crypto/
+
+# Database files
+*.db
+exit_strategy.db
+
+# Claude Code files
+.claude/
+CLAUDE.md

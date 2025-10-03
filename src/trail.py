@@ -1,4 +1,3 @@
-import ccxt
 import config
 import datetime
 import logging
@@ -19,9 +18,8 @@ class StopTrail():
 
 		# establish a connection with exchange
 		self.coinbasepro = CoinbasePro(
-			api_key=Config.get_value('api','api_key'),
-			api_secret=Config.get_value('api','api_secret'),
-			password=Config.get_value('api','password')
+			api_key=Config.get_value('api','api_key_name'),
+			api_secret=Config.get_value('api','api_private_key')
 		)
 		
 		# set our variables
@@ -328,20 +326,25 @@ class StopTrail():
 			self.cursor.close()
 			self.con.commit()
 
-		except ccxt.AuthenticationError as e:
-			logger.exception('Failed to execute sell order | AUTHENTICATION ERROR | %s' % str(e))
+		except ValueError as e:
+			# Handle authentication or API key errors
+			logger.exception('Failed to execute sell order | AUTHENTICATION/API ERROR | %s' % str(e))
 			raise
-		except ccxt.InsufficientFunds as e:
-			logger.exception('Failed to execute sell order  | INSUFFICIENT FUNDS | %s' % str(e))
-			raise
-		except ccxt.BadRequest as e:
-			logger.exception('Failed to execute sell order  | BAD REQUEST | %s' % str(e))
-			raise
-		except ccxt.NetworkError as e:
-			logger.exception('Failed to execute sell order  | NETWORK ERROR | %s' % e)
+		except ConnectionError as e:
+			# Handle network errors
+			logger.exception('Failed to execute sell order | NETWORK ERROR | %s' % e)
 			#raise ### we should not raise the exception here, we should let the script continue, which will result in a loop of network errors until it succeeds.
 		except Exception as e:
-			logger.exception('%s | %s' % (error_message, e))
+			# Catch-all for other errors (insufficient funds, bad requests, etc.)
+			error_str = str(e).lower()
+			if 'insufficient' in error_str or 'funds' in error_str:
+				logger.exception('Failed to execute sell order | INSUFFICIENT FUNDS | %s' % str(e))
+			elif 'auth' in error_str or 'permission' in error_str:
+				logger.exception('Failed to execute sell order | AUTHENTICATION ERROR | %s' % str(e))
+			elif 'bad' in error_str or 'invalid' in error_str:
+				logger.exception('Failed to execute sell order | BAD REQUEST | %s' % str(e))
+			else:
+				logger.exception('%s | %s' % (error_message, e))
 			raise
 
 
@@ -435,20 +438,24 @@ class StopTrail():
 			self.cursor.close()
 			self.con.commit()
 		
-		except ccxt.AuthenticationError as e:
-			logger.exception('Failed to execute buy order | Authentication error | %s' % str(e))
+		except ValueError as e:
+			# Handle authentication or API key errors
+			logger.exception('Failed to execute buy order | AUTHENTICATION/API ERROR | %s' % str(e))
 			raise
-		except ccxt.InsufficientFunds as e:
-			logger.exception('Failed to execute buy order  | Insufficient funds | %s' % str(e))
-			raise
-		except ccxt.BadRequest as e:
-			logger.exception('Failed to execute buy order  | Bad request| %s' % str(e))
-			raise
-		except ccxt.NetworkError as e:
-			logger.exception('Failed to execute buy order  | Network error | %s' % e)
-
+		except ConnectionError as e:
+			# Handle network errors
+			logger.exception('Failed to execute buy order | NETWORK ERROR | %s' % e)
 		except Exception as e:
-			logger.exception('%s | %s' % (error_message, e))
+			# Catch-all for other errors (insufficient funds, bad requests, etc.)
+			error_str = str(e).lower()
+			if 'insufficient' in error_str or 'funds' in error_str:
+				logger.exception('Failed to execute buy order | INSUFFICIENT FUNDS | %s' % str(e))
+			elif 'auth' in error_str or 'permission' in error_str:
+				logger.exception('Failed to execute buy order | AUTHENTICATION ERROR | %s' % str(e))
+			elif 'bad' in error_str or 'invalid' in error_str:
+				logger.exception('Failed to execute buy order | BAD REQUEST | %s' % str(e))
+			else:
+				logger.exception('%s | %s' % (error_message, e))
 			raise
 
 

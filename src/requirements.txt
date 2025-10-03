@@ -1,7 +1,8 @@
 argparse
 boto3
 ccxt
+coinbase-advanced-py
 config
-configparser 
+configparser
 datetime
 pandas
